@@ -1,0 +1,45 @@
+name: Update YouTube m3u8
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"         # every 3 hours
+  workflow_dispatch:              # allow manual run
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install yt-dlp and jq
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yt-dlp
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Refresh .m3u8 pointers
+        run: |
+          mkdir -p output
+          # Loop channels and fetch the latest *HLS* URL (m3u8 preferred)
+          while IFS="=" read -r key url; do
+            [ -z "$key" ] && continue
+            echo "Fetching $key from $url"
+            if stream=$(yt-dlp -g -f "best[protocol*=m3u8]/best" "$url" 2>/dev/null | head -n1); then
+              # Write the raw URL into a .m3u8 file (single line)
+              printf "%s\n" "$stream" > "output/${key}.m3u8"
+            else
+              # If no live stream found, use offline 
+              echo "https://files.catbox.moe/7m59t3.mp4" > "output/${key}.m3u8"
+            fi
+          done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' channels.json)
+
+      - name: Commit updated files
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add output/*.m3u8
+          git commit -m "Update m3u8 pointers" || echo "No changes to commit"
+          git push
